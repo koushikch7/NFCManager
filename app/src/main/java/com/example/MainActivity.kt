@@ -39,12 +39,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import android.content.Context
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.room.Room
 import com.example.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -77,12 +82,19 @@ data class NfcUiState(
     val logs: List<LogEntry> = emptyList(),
     val chatMessages: List<ChatMessage> = listOf(ChatMessage("Hi! I'm your NFC Assistant. I can help you format data or switch modes. What do you need?", false)),
     val isChatLoading: Boolean = false,
-    val profileData: ProfileData = ProfileData()
+    val profileData: ProfileData = ProfileData(),
+    val history: List<NfcHistoryEntity> = emptyList()
 )
 
-class NfcViewModel : ViewModel() {
+class NfcViewModel(private val repository: NfcHistoryRepository) : ViewModel() {
     private val _uiState = MutableStateFlow(NfcUiState())
-    val uiState: StateFlow<NfcUiState> = _uiState.asStateFlow()
+    val uiState: StateFlow<NfcUiState> = combine(_uiState, repository.allHistory) { state, history ->
+        state.copy(history = history)
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = NfcUiState()
+    )
 
     fun updateProfile(profile: ProfileData) {
         _uiState.update { it.copy(profileData = profile) }
@@ -104,6 +116,16 @@ class NfcViewModel : ViewModel() {
     fun log(message: String) {
         val entry = LogEntry(System.currentTimeMillis(), message)
         _uiState.update { it.copy(logs = listOf(entry) + it.logs) }
+    }
+
+    fun logOperationToDb(tagId: String, data: String) {
+        viewModelScope.launch {
+            repository.insert(NfcHistoryEntity(
+                operationMode = _uiState.value.currentMode.name,
+                tagId = tagId,
+                data = data
+            ))
+        }
     }
 
     fun sendChatMessage(message: String) {
@@ -162,7 +184,17 @@ class MainActivity : ComponentActivity() {
 
     private var nfcAdapter: NfcAdapter? = null
     private var pendingIntent: PendingIntent? = null
-    private val viewModel: NfcViewModel by viewModels()
+    
+    private val viewModel: NfcViewModel by viewModels {
+        val db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "nfc_db").build()
+        val repo = NfcHistoryRepository(db.nfcHistoryDao())
+        object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                @Suppress("UNCHECKED_CAST")
+                return NfcViewModel(repo) as T
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -213,10 +245,22 @@ class MainActivity : ComponentActivity() {
                 viewModel.log("Tag detected. ID: $tagId")
                 
                 when (viewModel.uiState.value.currentMode) {
-                    NfcOperationMode.READ -> handleReadTag(it)
-                    NfcOperationMode.WRITE -> viewModel.log("Write operation simulated. Ready to write payload.")
-                    NfcOperationMode.RESET -> viewModel.log("Reset operation simulated. Format complete.")
-                    NfcOperationMode.WRITE_PROFILE -> handleWriteProfile(it)
+                    NfcOperationMode.READ -> {
+                        viewModel.logOperationToDb(tagId, "Read Tag Data")
+                        handleReadTag(it)
+                    }
+                    NfcOperationMode.WRITE -> {
+                        viewModel.logOperationToDb(tagId, "Simulated Write")
+                        viewModel.log("Write operation simulated. Ready to write payload.")
+                    }
+                    NfcOperationMode.RESET -> {
+                        viewModel.logOperationToDb(tagId, "Format/Reset Tag")
+                        viewModel.log("Reset operation simulated. Format complete.")
+                    }
+                    NfcOperationMode.WRITE_PROFILE -> {
+                        viewModel.logOperationToDb(tagId, "Write Digital Profile: ${viewModel.uiState.value.profileData.name}")
+                        handleWriteProfile(it)
+                    }
                 }
             }
         }
@@ -440,7 +484,10 @@ fun NfcDashboardScreen(viewModel: NfcViewModel) {
                 }
             }
             
-            Text("Activity Log", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            if (uiState.history.isNotEmpty()) {
+                OperationStatsChart(uiState.history)
+            }
+            Text("Operation History", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -449,14 +496,20 @@ fun NfcDashboardScreen(viewModel: NfcViewModel) {
                     .padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                items(uiState.logs) { log ->
-                    val format = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+                items(uiState.history) { log ->
+                    val format = SimpleDateFormat("MMM dd, HH:mm:ss", Locale.getDefault())
                     val timeString = format.format(Date(log.timestamp))
                     Text(
-                        text = "[$timeString] ${log.message}",
+                        text = "[$timeString] ${log.operationMode} - Tag ID: ${log.tagId}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = log.data,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
         }

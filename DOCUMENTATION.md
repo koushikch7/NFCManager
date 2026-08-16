@@ -62,3 +62,7 @@ This application strictly adheres to standard Android API limitations and softwa
 *   **Hardware Integrity:** The app relies on `Ndef.isWritable` and standard SDK methods. It **does not** contain logic to bypass permanent read-only locks or exploit proprietary sector keys (e.g., MIFARE Classic sector cracking).
 *   **Financial & Access Data:** The app **does not** implement ISO-DEP / APDU cloning commands necessary to replicate EMV (credit cards) or encrypted transit/access tokens.
 *   **Safe Execution:** All interactions are handled at the NDEF abstraction layer, ensuring the app remains safe, legal, and compliant with device security policies.
+
+### 3.6. Data Visualization
+*   **Vico Charts:** Uses the `Vico` Jetpack Compose charting library to generate a native, real-time bar chart of operation distributions.
+*   **Analytics Layer:** Groups data pulled from the Room database and categorizes frequencies across standard Read, Write, Reset, and Profile format modes.
