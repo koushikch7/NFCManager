@@ -1,0 +1,6 @@
+{
+  "name": "NFC Manager",
+  "description": "Read, write, and format NFC tags",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
